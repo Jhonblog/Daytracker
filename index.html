@@ -254,6 +254,28 @@
 
             const containerRef = useRef(null);
 
+            // === 退出 Google 账号 ===
+            const handleGoogleSignOut = () => {
+                openConfirm(
+                    '退出 Google 账号',
+                    '确定要退出当前绑定吗？退出后将暂停云端自动同步，但您的本地数据不会受影响。',
+                    () => {
+                        const token = gapi?.client?.getToken()?.access_token;
+                        if (token && window.google) {
+                            google.accounts.oauth2.revoke(token, () => {
+                                console.log('Google token revoked');
+                            });
+                        }
+                        if (window.gapi && gapi.client) {
+                            gapi.client.setToken(null);
+                        }
+                        setIsGoogleSignedIn(false);
+                        closeConfirm();
+                    },
+                    'warning'
+                );
+            };
+
             // === Google API 与 GIS 服务初始化 ===
             useEffect(() => {
                 let attempts = 0;
@@ -904,9 +926,9 @@
                                         {/* 新增: Google Drive 云同步模块 */}
                                         <div className="bg-blue-50/50 p-2 rounded-lg border border-blue-100 flex flex-col gap-1.5">
                                             <div className="flex items-center justify-between">
-                                                <div className="flex items-center gap-1">
+                                                <div className="flex items-center gap-1" title="记录、类别、模板均会自动同步">
                                                     <Icon name="Cloud" size={14} className={isGoogleSignedIn ? "text-blue-500" : "text-slate-400"}/>
-                                                    <span className="text-[11px] font-bold text-slate-700">云同步</span>
+                                                    <span className="text-[11px] font-bold text-slate-700">云同步 <span className="font-normal text-slate-500">(全数据)</span></span>
                                                 </div>
                                                 {!isGoogleSignedIn ? (
                                                     <button onClick={handleGoogleLogin} className="text-[10px] bg-white border border-blue-200 text-blue-600 px-2 py-0.5 rounded shadow-sm hover:bg-blue-50 transition-colors">绑定 Google</button>
@@ -924,7 +946,12 @@
                                                 )}
                                             </div>
                                             {isGoogleSignedIn && (
-                                                <div className="text-[9px] text-slate-400 text-right pr-1">上次同步: {syncTime}</div>
+                                                <div className="flex items-center justify-between pr-1">
+                                                    <button onClick={handleGoogleSignOut} className="text-[9px] text-red-500 hover:text-red-700 hover:underline transition-colors">
+                                                        退出账号
+                                                    </button>
+                                                    <div className="text-[9px] text-slate-400">上次同步: {syncTime}</div>
+                                                </div>
                                             )}
                                         </div>
 
