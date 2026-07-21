@@ -342,38 +342,68 @@
 
             const executeDriveUpload = async (fileId, data, timestamp) => {
                 const fileContent = JSON.stringify({ data, timestamp });
-                const file = new Blob([fileContent], { type: 'application/json' });
-                const metadata = { name: 'day-tracker-backup.json', parents: ['appDataFolder'] };
+                let res;
 
-                let url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-                let method = 'POST';
                 if (fileId) {
-                    url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
-                    method = 'PATCH';
+                    // 更新已有文件：直接使用 media 上传，更轻量安全
+                    const url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`;
+                    res = await fetch(url, {
+                        method: 'PATCH',
+                        headers: {
+                            'Authorization': 'Bearer ' + gapi.client.getToken().access_token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: fileContent
+                    });
+                } else {
+                    // 首次创建：必须使用精确的 multipart/related 格式，指定父文件夹为 appDataFolder
+                    const metadata = { name: 'day-tracker-backup.json', parents: ['appDataFolder'] };
+                    const boundary = '-------314159265358979323846';
+                    const delimiter = "\r\n--" + boundary + "\r\n";
+                    const close_delim = "\r\n--" + boundary + "--";
+
+                    const multipartRequestBody =
+                        delimiter +
+                        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+                        JSON.stringify(metadata) +
+                        delimiter +
+                        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+                        fileContent +
+                        close_delim;
+
+                    const url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+                    res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + gapi.client.getToken().access_token,
+                            'Content-Type': 'multipart/related; boundary=' + boundary
+                        },
+                        body: multipartRequestBody
+                    });
                 }
 
-                const form = new FormData();
-                form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-                form.append('file', file);
-
-                const res = await fetch(url, {
-                    method: method,
-                    headers: { Authorization: 'Bearer ' + gapi.client.getToken().access_token },
-                    body: form
-                });
-                
                 if (res.ok) {
                     const nowStr = new Date().toLocaleString();
                     setSyncTime(nowStr);
                     localStorage.setItem('day-tracker-synctime', nowStr);
-                } else { throw new Error('上传云端失败'); }
+                } else { 
+                    let errDetail = '网络错误';
+                    try { const errData = await res.json(); errDetail = errData.error.message; } catch(e) {}
+                    throw new Error(`上传云端失败: ${errDetail} (状态码 ${res.status})`);
+                }
             };
 
             const handleManualSync = async (isBackground = false, optionalToken = null) => {
                 setIsSyncing(true);
                 try {
-                    const token = optionalToken || gapi.client.getToken()?.access_token;
-                    if (!token) throw new Error("未获取到登录令牌");
+                    const currentTokenObj = gapi.client.getToken();
+                    const token = optionalToken || currentTokenObj?.access_token;
+                    if (!token) throw new Error("未获取到登录令牌，请重新绑定 Google 账号。");
+
+                    // 严苛权限检测：确保用户真正勾选了隐藏文件夹权限
+                    if (currentTokenObj && currentTokenObj.scope && !currentTokenObj.scope.includes('drive.appdata')) {
+                        throw new Error("同步被拒绝：您在 Google 授权界面未勾选【应用专有数据】的复选框。\n\n解决办法：请点击下方「退出账号」，重新绑定并在弹窗中务必打勾！");
+                    }
 
                     const resList = await gapi.client.drive.files.list({
                         spaces: 'appDataFolder',
@@ -408,7 +438,18 @@
                     }
                 } catch(e) {
                     console.error("同步异常:", e);
-                    if (!isBackground) openConfirm('同步失败', '无法连接到 Google Drive，请检查网络或确认已正确配置 API 凭证。', closeConfirm, 'warning');
+                    let errorMsg = '无法连接到 Google Drive。';
+                    
+                    if (e.result && e.result.error) {
+                        errorMsg = `Google API 报错: ${e.result.error.message}`;
+                    } else if (e.message) {
+                        errorMsg = e.message;
+                    }
+                    
+                    // 补充智能提示
+                    errorMsg += '\n\n【诊断建议】\n1. 请检查您的 Google Cloud 控制台中是否已启用 "Google Drive API"。\n2. 登录授权时，请确保勾选了允许应用访问 Drive AppData 的复选框。';
+                    
+                    if (!isBackground) openConfirm('同步失败', errorMsg, closeConfirm, 'warning');
                 }
                 setIsSyncing(false);
             };
